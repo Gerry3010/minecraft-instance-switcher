@@ -20,6 +20,8 @@ const (
 	stateDetail
 	stateCreate
 	stateConfirmDelete
+	stateSearch
+	stateConfirmRestore
 )
 
 type keyMap struct {
@@ -33,6 +35,7 @@ type keyMap struct {
 	Delete      key.Binding
 	Refresh     key.Binding
 	Restore     key.Binding
+	Search      key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -42,8 +45,8 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Enter},
-		{k.Create, k.Delete, k.Refresh},
-		{k.Restore, k.Back, k.Quit},
+		{k.Create, k.Delete, k.Search},
+		{k.Refresh, k.Restore, k.Back, k.Quit},
 	}
 }
 
@@ -88,10 +91,26 @@ var keys = keyMap{
 		key.WithKeys("R"),
 		key.WithHelp("R", "restore default"),
 	),
+	Search: key.NewBinding(
+		key.WithKeys("s"),
+		key.WithHelp("s", "search instances"),
+	),
 }
 
 type instanceItem struct {
 	instance.Instance
+}
+
+type searchItem struct {
+	InstanceName string
+	Directory    string
+	Files        []string
+	FileCount    int
+}
+
+type searchData struct {
+	Instances map[string][]searchItem
+	AllItems  []searchItem
 }
 
 func (i instanceItem) FilterValue() string { return i.Name }
@@ -107,15 +126,33 @@ func (i instanceItem) Description() string {
 		status, i.ModCount, i.ConfigCount, i.SaveCount)
 }
 
+func (s searchItem) FilterValue() string { return s.InstanceName + " " + s.Directory }
+func (s searchItem) Title() string {
+	return fmt.Sprintf("%s/%s", s.InstanceName, s.Directory)
+}
+func (s searchItem) Description() string {
+	fileDesc := fmt.Sprintf("%d files", s.FileCount)
+	if len(s.Files) > 0 {
+		preview := strings.Join(s.Files[:min(len(s.Files), 3)], ", ")
+		if len(s.Files) > 3 {
+			preview += "..."
+		}
+		return fmt.Sprintf("%s: %s", fileDesc, preview)
+	}
+	return fileDesc
+}
+
 type model struct {
 	state          state
 	manager        *instance.Manager
 	list           list.Model
+	searchList     list.Model
 	help           help.Model
 	textInput      textinput.Model
 	instances      []instance.Instance
 	selectedInstance *instance.Instance
 	instanceInfo   *instance.InstanceInfo
+	searchData     *searchData
 	message        string
 	err            error
 	keys           keyMap
@@ -126,6 +163,8 @@ type switchMsg struct{ name string }
 type createMsg struct{ name string }
 type deleteMsg struct{ name string }
 type restoreMsg struct{}
+type searchMsg struct{}
+type confirmRestoreMsg struct{}
 
 func initialModel() model {
 	manager, err := instance.NewManager()
@@ -138,6 +177,14 @@ func initialModel() model {
 	l.SetFilteringEnabled(false)
 	l.Styles.Title = titleStyle
 
+	// Initialize search list
+	searchItems := []list.Item{}
+	sl := list.New(searchItems, list.NewDefaultDelegate(), 0, 0)
+	sl.Title = "Instance Directory Search"
+	sl.SetShowStatusBar(false)
+	sl.SetFilteringEnabled(true)
+	sl.Styles.Title = titleStyle
+
 	// Initialize text input
 	ti := textinput.New()
 	ti.Placeholder = "Enter instance name..."
@@ -149,13 +196,14 @@ func initialModel() model {
 	h := help.New()
 
 	m := model{
-		state:     stateList,
-		manager:   manager,
-		list:      l,
-		help:      h,
-		textInput: ti,
-		keys:      keys,
-		err:       err,
+		state:      stateList,
+		manager:    manager,
+		list:       l,
+		searchList: sl,
+		help:       h,
+		textInput:  ti,
+		keys:       keys,
+		err:        err,
 	}
 
 	return m
@@ -182,6 +230,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateCreate(msg)
 		case stateConfirmDelete:
 			return m.updateConfirmDelete(msg)
+		case stateSearch:
+			return m.updateSearch(msg)
+		case stateConfirmRestore:
+			return m.updateConfirmRestore(msg)
 		}
 
 	case tea.WindowSizeMsg:
@@ -242,11 +294,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = "Restored default minecraft directory"
 		}
 		return m, refreshInstances
+
+	case searchMsg:
+		searchData, err := m.buildSearchData()
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.searchData = searchData
+		
+		// Populate search list
+		items := make([]list.Item, len(searchData.AllItems))
+		for i, item := range searchData.AllItems {
+			items[i] = item
+		}
+		m.searchList.SetItems(items)
+		m.state = stateSearch
+		return m, nil
+
+	case confirmRestoreMsg:
+		m.state = stateConfirmRestore
+		return m, nil
 	}
 
 	// Update sub-models
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
+	cmds = append(cmds, cmd)
+
+	m.searchList, cmd = m.searchList.Update(msg)
 	cmds = append(cmds, cmd)
 
 	m.textInput, cmd = m.textInput.Update(msg)
@@ -309,7 +385,12 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, m.keys.Restore):
 		return m, func() tea.Msg {
-			return restoreMsg{}
+			return confirmRestoreMsg{}
+		}
+
+	case key.Matches(msg, m.keys.Search):
+		return m, func() tea.Msg {
+			return searchMsg{}
 		}
 
 	case key.Matches(msg, m.keys.Help):
@@ -361,6 +442,30 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Back), key.Matches(msg, m.keys.Quit):
+		m.state = stateList
+	}
+
+	// Update search list
+	var cmd tea.Cmd
+	m.searchList, cmd = m.searchList.Update(msg)
+	return m, cmd
+}
+
+func (m model) updateConfirmRestore(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		return m, func() tea.Msg {
+			return restoreMsg{}
+		}
+	case "n", "N", "esc":
+		m.state = stateList
+	}
+	return m, nil
+}
+
 func (m model) View() string {
 	switch m.state {
 	case stateList:
@@ -371,6 +476,10 @@ func (m model) View() string {
 		return m.viewCreate()
 	case stateConfirmDelete:
 		return m.viewConfirmDelete()
+	case stateSearch:
+		return m.viewSearch()
+	case stateConfirmRestore:
+		return m.viewConfirmRestore()
 	}
 	return ""
 }
@@ -476,8 +585,97 @@ func (m model) viewConfirmDelete() string {
 	return content.String()
 }
 
+func (m model) viewSearch() string {
+	var content strings.Builder
+	
+	if m.err != nil {
+		content.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
+		content.WriteString("\n\n")
+	}
+
+	content.WriteString(m.searchList.View())
+	content.WriteString("\n")
+	content.WriteString(dimStyle.Render("Press ESC to go back, / to filter, Enter to view details"))
+
+	return content.String()
+}
+
+func (m model) viewConfirmRestore() string {
+	var content strings.Builder
+	
+	content.WriteString(titleStyle.Render("Confirm Restore"))
+	content.WriteString("\n\n")
+	content.WriteString("Are you sure you want to restore the default .minecraft directory?\n")
+	content.WriteString("This will remove the current symlink and restore your original .minecraft folder.\n\n")
+	content.WriteString(errorStyle.Render("Press 'y' to confirm, 'n' to cancel"))
+
+	return content.String()
+}
+
 func refreshInstances() tea.Msg {
 	return refreshMsg{}
+}
+
+func (m *model) buildSearchData() (*searchData, error) {
+	instances, err := m.manager.ListInstances()
+	if err != nil {
+		return nil, err
+	}
+
+	searchData := &searchData{
+		Instances: make(map[string][]searchItem),
+		AllItems:  []searchItem{},
+	}
+
+	for _, inst := range instances {
+		instanceItems := []searchItem{}
+		
+		// Get detailed instance info
+		info, err := m.manager.GetInstanceInfo(inst.Name)
+		if err != nil {
+			continue // Skip this instance if we can't read it
+		}
+
+		// Add mods directory
+		if len(info.ModsDir) > 0 {
+			item := searchItem{
+				InstanceName: inst.Name,
+				Directory:    "mods",
+				Files:        info.ModsDir,
+				FileCount:    len(info.ModsDir),
+			}
+			instanceItems = append(instanceItems, item)
+			searchData.AllItems = append(searchData.AllItems, item)
+		}
+
+		// Add config directory
+		if len(info.ConfigsDir) > 0 {
+			item := searchItem{
+				InstanceName: inst.Name,
+				Directory:    "config",
+				Files:        info.ConfigsDir[:min(len(info.ConfigsDir), 20)], // Limit for display
+				FileCount:    len(info.ConfigsDir),
+			}
+			instanceItems = append(instanceItems, item)
+			searchData.AllItems = append(searchData.AllItems, item)
+		}
+
+		// Add saves directory
+		if len(info.SavesDir) > 0 {
+			item := searchItem{
+				InstanceName: inst.Name,
+				Directory:    "saves",
+				Files:        info.SavesDir,
+				FileCount:    len(info.SavesDir),
+			}
+			instanceItems = append(instanceItems, item)
+			searchData.AllItems = append(searchData.AllItems, item)
+		}
+
+		searchData.Instances[inst.Name] = instanceItems
+	}
+
+	return searchData, nil
 }
 
 func min(a, b int) int {

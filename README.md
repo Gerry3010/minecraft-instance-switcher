@@ -81,6 +81,7 @@ The interactive terminal interface provides:
 | `Enter` | Switch to instance or view details |
 | `c` | Create new instance |
 | `d` | Delete selected instance |
+| `s` | Search instances and directories |
 | `r` | Refresh instance list |
 | `R` | Restore default .minecraft |
 | `?` | Toggle help |
