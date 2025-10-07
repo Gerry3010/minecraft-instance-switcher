@@ -19,3 +19,12 @@ test-instances/
 
 # Personal configuration
 personal-config/
+
+# Go build artifacts
+minecraft-instance-manager
+minecraft-instance-manager.exe
+dist/
+*.log
+
+# Go modules
+vendor/

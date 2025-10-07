@@ -164,7 +164,7 @@ When you switch instances:
 cp my-mod.jar ~/.minecraft-instances/my-instance/mods/
 
 # Or switch to instance and use normal mod installation
-./minecraft-instances switch my-instance
+minecraft-instance-manager switch my-instance
 # Now use your launcher's mod management or copy mods to ~/.minecraft/mods/
 ```
 
@@ -199,11 +199,11 @@ Current instance: sebi-1.20.1
 ### Minecraft won't launch
 - Verify the instance has all required files (copied during creation)
 - Check Minecraft version compatibility
-- Use `./minecraft-instances restore` to return to original setup
+- Use `minecraft-instance-manager restore` to return to original setup
 
 ### Lost original .minecraft
 - Your original is backed up at `~/.minecraft.backup`
-- Run `./minecraft-instances restore` to recover it
+- Run `minecraft-instance-manager restore` to recover it
 
 ## 🤝 Contributing
 
