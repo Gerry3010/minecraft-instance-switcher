@@ -2,7 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Gerry3010/minecraft-instance-switcher/internal/instance"
 	"github.com/charmbracelet/bubbles/help"
@@ -45,6 +49,7 @@ type keyMap struct {
 	Search      key.Binding
 	TabNext     key.Binding
 	TabPrev     key.Binding
+	Edit        key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -55,7 +60,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Enter},
 		{k.Create, k.Delete, k.Restore},
-		{k.Search, k.Refresh, k.Help},
+		{k.Search, k.Edit, k.Refresh, k.Help},
 		{k.Back, k.Quit},
 	}
 }
@@ -113,6 +118,10 @@ var keys = keyMap{
 		key.WithKeys("shift+tab"),
 		key.WithHelp("shift+tab", "prev panel"),
 	),
+	Edit: key.NewBinding(
+		key.WithKeys("e"),
+		key.WithHelp("e", "edit config"),
+	),
 }
 
 type instanceItem struct {
@@ -161,12 +170,46 @@ func (s searchItem) Description() string {
 }
 
 type fileItem struct {
-	Name string
+	Name         string
+	MaxWidth     int
+	ScrollOffset int
+	IsSelected   bool
 }
 
 func (f fileItem) FilterValue() string { return f.Name }
-func (f fileItem) Title() string       { return f.Name }
+
+func (f fileItem) Title() string {
+	// If selected and name is too long, scroll horizontally
+	if f.IsSelected && len(f.Name) > f.MaxWidth && f.MaxWidth > 0 {
+		return f.scrollText(f.Name, f.MaxWidth, f.ScrollOffset)
+	}
+	// Otherwise truncate with ellipsis
+	if len(f.Name) > f.MaxWidth && f.MaxWidth > 0 {
+		if f.MaxWidth <= 3 {
+			return f.Name[:f.MaxWidth]
+		}
+		return f.Name[:f.MaxWidth-3] + "..."
+	}
+	return f.Name
+}
+
 func (f fileItem) Description() string { return "" }
+
+func (f fileItem) scrollText(text string, maxWidth, offset int) string {
+	if len(text) <= maxWidth {
+		return text
+	}
+	
+	// Create a sliding window effect
+	visibleText := text + "   " + text // Add some spacing and repeat
+	start := offset % len(text)
+	visiblePart := visibleText[start:]
+	
+	if len(visiblePart) >= maxWidth {
+		return visiblePart[:maxWidth]
+	}
+	return visiblePart + visibleText[:maxWidth-len(visiblePart)]
+}
 
 type model struct {
 	state          state
@@ -183,6 +226,9 @@ type model struct {
 	instanceInfo   *instance.InstanceInfo
 	searchData     *searchData
 	activePanel    detailPanel
+	terminalWidth  int
+	terminalHeight int
+	scrollOffset   int
 	message        string
 	err            error
 	keys           keyMap
@@ -193,8 +239,8 @@ type switchMsg struct{ name string }
 type createMsg struct{ name string }
 type deleteMsg struct{ name string }
 type restoreMsg struct{}
-type searchMsg struct{}
 type confirmRestoreMsg struct{}
+type tickMsg struct{}
 
 func initialModel() model {
 	manager, err := instance.NewManager()
@@ -245,18 +291,20 @@ func initialModel() model {
 	h := help.New()
 
 	m := model{
-		state:       stateList,
-		manager:     manager,
-		list:        l,
-		searchList:  sl,
-		modsList:    modsList,
-		configsList: configsList,
-		savesList:   savesList,
-		help:        h,
-		textInput:   ti,
-		activePanel: panelMods,
-		keys:        keys,
-		err:         err,
+		state:          stateList,
+		manager:        manager,
+		list:           l,
+		searchList:     sl,
+		modsList:       modsList,
+		configsList:    configsList,
+		savesList:      savesList,
+		help:           h,
+		textInput:      ti,
+		activePanel:    panelMods,
+		terminalWidth:  120, // Default fallback
+		terminalHeight: 30,  // Default fallback
+		keys:           keys,
+		err:            err,
 	}
 
 	return m
@@ -266,7 +314,14 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		refreshInstances,
 		textinput.Blink,
+		tickCmd(),
 	)
+}
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(time.Millisecond*300, func(time.Time) tea.Msg {
+		return tickMsg{}
+	})
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -292,6 +347,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Width < 10 || msg.Height < 10 {
 			return m, nil
 		}
+		
+		// Store terminal dimensions
+		m.terminalWidth = msg.Width
+		m.terminalHeight = msg.Height
 		
 		m.list.SetSize(msg.Width, msg.Height-4)
 		m.searchList.SetSize(msg.Width, msg.Height-4)
@@ -370,6 +429,46 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case confirmRestoreMsg:
 		m.state = stateConfirmRestore
 		return m, nil
+
+	case tickMsg:
+		// Update scroll offset for filename scrolling, but only in detail panel view
+		if m.state == stateDetailPanel {
+			m.scrollOffset++
+			// Update items in the currently focused list with new scroll offset and selection state
+			switch m.activePanel {
+			case panelMods:
+				items := m.modsList.Items()
+				for i, item := range items {
+					if fileItem, ok := item.(fileItem); ok {
+						fileItem.ScrollOffset = m.scrollOffset
+						fileItem.IsSelected = (i == m.modsList.Index())
+						items[i] = fileItem
+					}
+				}
+				m.modsList.SetItems(items)
+			case panelConfigs:
+				items := m.configsList.Items()
+				for i, item := range items {
+					if fileItem, ok := item.(fileItem); ok {
+						fileItem.ScrollOffset = m.scrollOffset
+						fileItem.IsSelected = (i == m.configsList.Index())
+						items[i] = fileItem
+					}
+				}
+				m.configsList.SetItems(items)
+			case panelSaves:
+				items := m.savesList.Items()
+				for i, item := range items {
+					if fileItem, ok := item.(fileItem); ok {
+						fileItem.ScrollOffset = m.scrollOffset
+						fileItem.IsSelected = (i == m.savesList.Index())
+						items[i] = fileItem
+					}
+				}
+				m.savesList.SetItems(items)
+			}
+		}
+		return m, tickCmd()
 	}
 
 	// Update sub-models
@@ -417,21 +516,41 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.instanceInfo = info
 			
 			// Populate the detail panel lists directly
+			panelWidth := (m.terminalWidth / 3) - 4 // Account for borders and padding
+			if panelWidth < 10 {
+				panelWidth = 10
+			}
+			
 			modsItems := make([]list.Item, len(info.ModsDir))
 			for i, mod := range info.ModsDir {
-				modsItems[i] = fileItem{Name: mod}
+				modsItems[i] = fileItem{
+					Name:         mod,
+					MaxWidth:     panelWidth,
+					ScrollOffset: m.scrollOffset,
+					IsSelected:   i == 0, // First item is selected initially
+				}
 			}
 			m.modsList.SetItems(modsItems)
 			
 			configsItems := make([]list.Item, len(info.ConfigsDir))
 			for i, config := range info.ConfigsDir {
-				configsItems[i] = fileItem{Name: config}
+				configsItems[i] = fileItem{
+					Name:         config,
+					MaxWidth:     panelWidth,
+					ScrollOffset: m.scrollOffset,
+					IsSelected:   false, // Not initially selected
+				}
 			}
 			m.configsList.SetItems(configsItems)
 			
 			savesItems := make([]list.Item, len(info.SavesDir))
 			for i, save := range info.SavesDir {
-				savesItems[i] = fileItem{Name: save}
+				savesItems[i] = fileItem{
+					Name:         save,
+					MaxWidth:     panelWidth,
+					ScrollOffset: m.scrollOffset,
+					IsSelected:   false, // Not initially selected
+				}
 			}
 			m.savesList.SetItems(savesItems)
 			
@@ -606,6 +725,14 @@ func (m model) updateDetailPanel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.activePanel = (m.activePanel + 1) % 3
 	case key.Matches(msg, m.keys.TabPrev):
 		m.activePanel = (m.activePanel + 2) % 3 // +2 is same as -1 in mod 3
+	case key.Matches(msg, m.keys.Edit):
+		// Only allow editing in config panel
+		if m.activePanel == panelConfigs && m.selectedInstance != nil {
+			if m.configsList.SelectedItem() != nil {
+				configFile := m.configsList.SelectedItem().(fileItem)
+				return m, m.editConfigFile(configFile.Name)
+			}
+		}
 	}
 
 	// Update the appropriate list based on active panel
@@ -613,10 +740,16 @@ func (m model) updateDetailPanel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.activePanel {
 	case panelMods:
 		m.modsList, cmd = m.modsList.Update(msg)
+		// Update selection state for all items
+		m.updateItemSelectionState(panelMods)
 	case panelConfigs:
 		m.configsList, cmd = m.configsList.Update(msg)
+		// Update selection state for all items
+		m.updateItemSelectionState(panelConfigs)
 	case panelSaves:
 		m.savesList, cmd = m.savesList.Update(msg)
+		// Update selection state for all items
+		m.updateItemSelectionState(panelSaves)
 	}
 	return m, cmd
 }
@@ -631,6 +764,39 @@ func (m model) updateConfirmRestore(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = stateList
 	}
 	return m, nil
+}
+
+// updateItemSelectionState updates the IsSelected field for all items in the specified panel
+func (m *model) updateItemSelectionState(panel detailPanel) {
+	switch panel {
+	case panelMods:
+		items := m.modsList.Items()
+		for i, item := range items {
+			if fileItem, ok := item.(fileItem); ok {
+				fileItem.IsSelected = (i == m.modsList.Index())
+				items[i] = fileItem
+			}
+		}
+		m.modsList.SetItems(items)
+	case panelConfigs:
+		items := m.configsList.Items()
+		for i, item := range items {
+			if fileItem, ok := item.(fileItem); ok {
+				fileItem.IsSelected = (i == m.configsList.Index())
+				items[i] = fileItem
+			}
+		}
+		m.configsList.SetItems(items)
+	case panelSaves:
+		items := m.savesList.Items()
+		for i, item := range items {
+			if fileItem, ok := item.(fileItem); ok {
+				fileItem.IsSelected = (i == m.savesList.Index())
+				items[i] = fileItem
+			}
+		}
+		m.savesList.SetItems(items)
+	}
 }
 
 func (m model) View() string {
@@ -787,9 +953,17 @@ func (m model) viewDetailPanel() string {
 		return "No instance selected"
 	}
 
-	// Sizes are handled in the WindowSizeMsg in Update function
+	// Use stored terminal width or fallback
+	terminalWidth := m.terminalWidth
+	if terminalWidth == 0 {
+		terminalWidth = 120 // Default fallback
+	}
+	panelWidth := (terminalWidth / 3) - 2 // Account for borders
+	if panelWidth < 10 {
+		panelWidth = 10
+	}
 
-	// Apply active styles
+	// Apply active styles to titles
 	if m.activePanel == panelMods {
 		m.modsList.Styles.Title = titleStyle
 		m.configsList.Styles.Title = dimStyle
@@ -807,10 +981,34 @@ func (m model) viewDetailPanel() string {
 	// Create header
 	header := titleStyle.Render(fmt.Sprintf("Instance Details: %s", m.selectedInstance.Name))
 
-	// Create three-column layout using lipgloss
-	modsView := m.modsList.View()
-	configsView := m.configsList.View()
-	savesView := m.savesList.View()
+	// Create panel styles with borders and backgrounds
+	activePanelStyle := lipgloss.NewStyle().
+		Width(panelWidth).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#7D56F4")).
+		Padding(0, 1)
+	
+	inactivePanelStyle := lipgloss.NewStyle().
+		Width(panelWidth).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#444444")).
+		Padding(0, 1)
+
+	// Apply appropriate styles based on active panel
+	var modsView, configsView, savesView string
+	if m.activePanel == panelMods {
+		modsView = activePanelStyle.Render(m.modsList.View())
+		configsView = inactivePanelStyle.Render(m.configsList.View())
+		savesView = inactivePanelStyle.Render(m.savesList.View())
+	} else if m.activePanel == panelConfigs {
+		modsView = inactivePanelStyle.Render(m.modsList.View())
+		configsView = activePanelStyle.Render(m.configsList.View())
+		savesView = inactivePanelStyle.Render(m.savesList.View())
+	} else {
+		modsView = inactivePanelStyle.Render(m.modsList.View())
+		configsView = inactivePanelStyle.Render(m.configsList.View())
+		savesView = activePanelStyle.Render(m.savesList.View())
+	}
 
 	// Join the three panels horizontally
 	panelsView := lipgloss.JoinHorizontal(
@@ -821,13 +1019,51 @@ func (m model) viewDetailPanel() string {
 	)
 
 	// Instructions
-	instructions := dimStyle.Render("Tab/Shift+Tab to switch panels • ESC to go back • ↑/↓ to navigate")
+	instructions := dimStyle.Render("Tab/Shift+Tab to switch panels • 'e' to edit config • ESC to go back • ↑/↓ to navigate")
 
 	return fmt.Sprintf("%s\n\n%s\n\n%s", header, panelsView, instructions)
 }
 
 func refreshInstances() tea.Msg {
 	return refreshMsg{}
+}
+
+func (m model) editConfigFile(configFileName string) tea.Cmd {
+	if m.selectedInstance == nil {
+		return nil
+	}
+
+	return tea.ExecProcess(&exec.Cmd{
+		Path: getEditor(),
+		Args: []string{
+			getEditor(),
+			filepath.Join(m.manager.InstancesPath, m.selectedInstance.Name, "config", configFileName),
+		},
+		Stdin:  os.Stdin,
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+	}, nil)
+}
+
+func getEditor() string {
+	// Try to get editor from environment variables
+	if editor := os.Getenv("EDITOR"); editor != "" {
+		return editor
+	}
+	if editor := os.Getenv("VISUAL"); editor != "" {
+		return editor
+	}
+
+	// Fallback to common editors in order of preference
+	editors := []string{"nano", "vim", "vi", "emacs", "code", "gedit"}
+	for _, editor := range editors {
+		if _, err := exec.LookPath(editor); err == nil {
+			return editor
+		}
+	}
+
+	// Ultimate fallback
+	return "vi"
 }
 
 func (m *model) buildSearchData() (*searchData, error) {
