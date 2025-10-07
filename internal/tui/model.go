@@ -18,10 +18,19 @@ type state int
 const (
 	stateList state = iota
 	stateDetail
+	stateDetailPanel
 	stateCreate
 	stateConfirmDelete
 	stateSearch
 	stateConfirmRestore
+)
+
+type detailPanel int
+
+const (
+	panelMods detailPanel = iota
+	panelConfigs
+	panelSaves
 )
 
 type keyMap struct {
@@ -36,6 +45,8 @@ type keyMap struct {
 	Refresh     key.Binding
 	Restore     key.Binding
 	Search      key.Binding
+	TabNext     key.Binding
+	TabPrev     key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -46,7 +57,8 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Enter},
 		{k.Create, k.Delete, k.Search},
-		{k.Refresh, k.Restore, k.Back, k.Quit},
+		{k.TabNext, k.TabPrev, k.Refresh},
+		{k.Restore, k.Back, k.Quit},
 	}
 }
 
@@ -84,16 +96,24 @@ var keys = keyMap{
 		key.WithHelp("d", "delete instance"),
 	),
 	Refresh: key.NewBinding(
-		key.WithKeys("r"),
-		key.WithHelp("r", "refresh"),
+		key.WithKeys("f5"),
+		key.WithHelp("f5", "refresh"),
 	),
 	Restore: key.NewBinding(
-		key.WithKeys("R"),
-		key.WithHelp("R", "restore default"),
+		key.WithKeys("r"),
+		key.WithHelp("r", "restore default"),
 	),
 	Search: key.NewBinding(
 		key.WithKeys("s"),
-		key.WithHelp("s", "search instances"),
+		key.WithHelp("s", "show directories"),
+	),
+	TabNext: key.NewBinding(
+		key.WithKeys("tab"),
+		key.WithHelp("tab", "next panel"),
+	),
+	TabPrev: key.NewBinding(
+		key.WithKeys("shift+tab"),
+		key.WithHelp("shift+tab", "prev panel"),
 	),
 }
 
@@ -142,17 +162,29 @@ func (s searchItem) Description() string {
 	return fileDesc
 }
 
+type fileItem struct {
+	Name string
+}
+
+func (f fileItem) FilterValue() string { return f.Name }
+func (f fileItem) Title() string       { return f.Name }
+func (f fileItem) Description() string { return "" }
+
 type model struct {
 	state          state
 	manager        *instance.Manager
 	list           list.Model
 	searchList     list.Model
+	modsList       list.Model
+	configsList    list.Model
+	savesList      list.Model
 	help           help.Model
 	textInput      textinput.Model
 	instances      []instance.Instance
 	selectedInstance *instance.Instance
 	instanceInfo   *instance.InstanceInfo
 	searchData     *searchData
+	activePanel    detailPanel
 	message        string
 	err            error
 	keys           keyMap
@@ -185,6 +217,25 @@ func initialModel() model {
 	sl.SetFilteringEnabled(true)
 	sl.Styles.Title = titleStyle
 
+	// Initialize detail panel lists
+	modsList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	modsList.Title = "Mods"
+	modsList.SetShowStatusBar(false)
+	modsList.SetFilteringEnabled(false)
+	modsList.Styles.Title = titleStyle
+
+	configsList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	configsList.Title = "Configs"
+	configsList.SetShowStatusBar(false)
+	configsList.SetFilteringEnabled(false)
+	configsList.Styles.Title = titleStyle
+
+	savesList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	savesList.Title = "Saves"
+	savesList.SetShowStatusBar(false)
+	savesList.SetFilteringEnabled(false)
+	savesList.Styles.Title = titleStyle
+
 	// Initialize text input
 	ti := textinput.New()
 	ti.Placeholder = "Enter instance name..."
@@ -196,14 +247,18 @@ func initialModel() model {
 	h := help.New()
 
 	m := model{
-		state:      stateList,
-		manager:    manager,
-		list:       l,
-		searchList: sl,
-		help:       h,
-		textInput:  ti,
-		keys:       keys,
-		err:        err,
+		state:       stateList,
+		manager:     manager,
+		list:        l,
+		searchList:  sl,
+		modsList:    modsList,
+		configsList: configsList,
+		savesList:   savesList,
+		help:        h,
+		textInput:   ti,
+		activePanel: panelMods,
+		keys:        keys,
+		err:         err,
 	}
 
 	return m
@@ -226,6 +281,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateList(msg)
 		case stateDetail:
 			return m.updateDetail(msg)
+		case stateDetailPanel:
+			return m.updateDetailPanel(msg)
 		case stateCreate:
 			return m.updateCreate(msg)
 		case stateConfirmDelete:
@@ -238,6 +295,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.list.SetSize(msg.Width, msg.Height-4)
+		m.searchList.SetSize(msg.Width, msg.Height-4)
+		
+		// Set panel sizes for detail view (each panel gets 1/3 of width)
+		panelWidth := msg.Width / 3
+		panelHeight := msg.Height - 6 // Leave space for header and instructions
+		m.modsList.SetSize(panelWidth, panelHeight)
+		m.configsList.SetSize(panelWidth, panelHeight)
+		m.savesList.SetSize(panelWidth, panelHeight)
 		return m, nil
 
 	case refreshMsg:
@@ -325,6 +390,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.searchList, cmd = m.searchList.Update(msg)
 	cmds = append(cmds, cmd)
 
+	m.modsList, cmd = m.modsList.Update(msg)
+	cmds = append(cmds, cmd)
+
+	m.configsList, cmd = m.configsList.Update(msg)
+	cmds = append(cmds, cmd)
+
+	m.savesList, cmd = m.savesList.Update(msg)
+	cmds = append(cmds, cmd)
+
 	m.textInput, cmd = m.textInput.Update(msg)
 	cmds = append(cmds, cmd)
 
@@ -406,6 +480,33 @@ func (m model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Back), key.Matches(msg, m.keys.Quit):
 		m.state = stateList
+	case key.Matches(msg, m.keys.Search): // 's' key to show detailed panels
+		// Populate the detail panel lists
+		if m.instanceInfo != nil {
+			// Populate mods list
+			modsItems := make([]list.Item, len(m.instanceInfo.ModsDir))
+			for i, mod := range m.instanceInfo.ModsDir {
+				modsItems[i] = fileItem{Name: mod}
+			}
+			m.modsList.SetItems(modsItems)
+
+			// Populate configs list
+			configsItems := make([]list.Item, len(m.instanceInfo.ConfigsDir))
+			for i, config := range m.instanceInfo.ConfigsDir {
+				configsItems[i] = fileItem{Name: config}
+			}
+			m.configsList.SetItems(configsItems)
+
+			// Populate saves list
+			savesItems := make([]list.Item, len(m.instanceInfo.SavesDir))
+			for i, save := range m.instanceInfo.SavesDir {
+				savesItems[i] = fileItem{Name: save}
+			}
+			m.savesList.SetItems(savesItems)
+
+			m.activePanel = panelMods
+			m.state = stateDetailPanel
+		}
 	}
 	return m, nil
 }
@@ -454,13 +555,36 @@ func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m model) updateDetailPanel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Back), key.Matches(msg, m.keys.Quit):
+		m.state = stateDetail
+	case key.Matches(msg, m.keys.TabNext):
+		m.activePanel = (m.activePanel + 1) % 3
+	case key.Matches(msg, m.keys.TabPrev):
+		m.activePanel = (m.activePanel + 2) % 3 // +2 is same as -1 in mod 3
+	}
+
+	// Update the appropriate list based on active panel
+	var cmd tea.Cmd
+	switch m.activePanel {
+	case panelMods:
+		m.modsList, cmd = m.modsList.Update(msg)
+	case panelConfigs:
+		m.configsList, cmd = m.configsList.Update(msg)
+	case panelSaves:
+		m.savesList, cmd = m.savesList.Update(msg)
+	}
+	return m, cmd
+}
+
 func (m model) updateConfirmRestore(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "y", "Y":
+	case "r", "enter":
 		return m, func() tea.Msg {
 			return restoreMsg{}
 		}
-	case "n", "N", "esc":
+	case "esc":
 		m.state = stateList
 	}
 	return m, nil
@@ -472,6 +596,8 @@ func (m model) View() string {
 		return m.viewList()
 	case stateDetail:
 		return m.viewDetail()
+	case stateDetailPanel:
+		return m.viewDetailPanel()
 	case stateCreate:
 		return m.viewCreate()
 	case stateConfirmDelete:
@@ -603,13 +729,62 @@ func (m model) viewSearch() string {
 func (m model) viewConfirmRestore() string {
 	var content strings.Builder
 	
-	content.WriteString(titleStyle.Render("Confirm Restore"))
+	content.WriteString(titleStyle.Render("Confirm Restore Default"))
 	content.WriteString("\n\n")
-	content.WriteString("Are you sure you want to restore the default .minecraft directory?\n")
-	content.WriteString("This will remove the current symlink and restore your original .minecraft folder.\n\n")
-	content.WriteString(errorStyle.Render("Press 'y' to confirm, 'n' to cancel"))
+	content.WriteString("⚠️  Are you sure you want to restore the default .minecraft directory?\n\n")
+	content.WriteString("This will:\n")
+	content.WriteString("• Remove the current instance symlink\n")
+	content.WriteString("• Restore your original .minecraft folder from backup\n")
+	content.WriteString("• Switch back to your pre-instance-manager setup\n\n")
+	content.WriteString(successStyle.Render("Press 'r' or Enter to restore"))
+	content.WriteString("  ")
+	content.WriteString(dimStyle.Render("Press ESC to cancel"))
 
 	return content.String()
+}
+
+func (m model) viewDetailPanel() string {
+	if m.selectedInstance == nil {
+		return "No instance selected"
+	}
+
+	// Sizes are handled in the WindowSizeMsg in Update function
+
+	// Apply active styles
+	if m.activePanel == panelMods {
+		m.modsList.Styles.Title = titleStyle
+		m.configsList.Styles.Title = dimStyle
+		m.savesList.Styles.Title = dimStyle
+	} else if m.activePanel == panelConfigs {
+		m.modsList.Styles.Title = dimStyle
+		m.configsList.Styles.Title = titleStyle
+		m.savesList.Styles.Title = dimStyle
+	} else {
+		m.modsList.Styles.Title = dimStyle
+		m.configsList.Styles.Title = dimStyle
+		m.savesList.Styles.Title = titleStyle
+	}
+
+	// Create header
+	header := titleStyle.Render(fmt.Sprintf("Instance Details: %s", m.selectedInstance.Name))
+
+	// Create three-column layout using lipgloss
+	modsView := m.modsList.View()
+	configsView := m.configsList.View()
+	savesView := m.savesList.View()
+
+	// Join the three panels horizontally
+	panelsView := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		modsView,
+		configsView,
+		savesView,
+	)
+
+	// Instructions
+	instructions := dimStyle.Render("Tab/Shift+Tab to switch panels • ESC to go back • ↑/↓ to navigate")
+
+	return fmt.Sprintf("%s\n\n%s\n\n%s", header, panelsView, instructions)
 }
 
 func refreshInstances() tea.Msg {

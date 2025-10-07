@@ -81,10 +81,12 @@ The interactive terminal interface provides:
 | `Enter` | Switch to instance or view details |
 | `c` | Create new instance |
 | `d` | Delete selected instance |
-| `s` | Search instances and directories |
-| `r` | Refresh instance list |
-| `R` | Restore default .minecraft |
+| `s` | Show detailed file panels (in detail view) |
+| `Tab/Shift+Tab` | Switch between panels (in panel view) |
+| `F5` | Refresh instance list |
+| `r` | Restore default .minecraft |
 | `?` | Toggle help |
+| `ESC` | Go back / Cancel |
 | `q` or `Ctrl+C` | Quit |
 
 ## 📋 CLI Commands
