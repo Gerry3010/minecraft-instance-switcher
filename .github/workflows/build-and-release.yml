@@ -56,29 +56,32 @@ jobs:
           BINARY_NAME="${BINARY_NAME}.exe"
         fi
         
-        OUTPUT_PATH="dist/${BINARY_NAME}-${{ matrix.os }}-${{ matrix.arch }}"
-        if [ "${{ matrix.os }}" = "windows" ]; then
-          OUTPUT_PATH="${OUTPUT_PATH}.exe"
-        fi
-        
         mkdir -p dist
-        go build -ldflags="-s -w" -o "${OUTPUT_PATH}" ./cmd/minecraft-instance-manager
+        go build -ldflags="-s -w" -o "dist/${BINARY_NAME}" ./cmd/minecraft-instance-manager
         
-        # Create archive
+        # Create archive with proper naming
+        cd dist
         if [ "${{ matrix.os }}" = "windows" ]; then
-          cd dist && zip "${BINARY_NAME}-${{ matrix.os }}-${{ matrix.arch }}.zip" "${BINARY_NAME}-${{ matrix.os }}-${{ matrix.arch }}.exe"
+          zip "minecraft-instance-manager-${{ matrix.os }}-${{ matrix.arch }}.zip" "${BINARY_NAME}"
         else
-          cd dist && tar -czf "${BINARY_NAME}-${{ matrix.os }}-${{ matrix.arch }}.tar.gz" "${BINARY_NAME}-${{ matrix.os }}-${{ matrix.arch }}"
+          tar -czf "minecraft-instance-manager-${{ matrix.os }}-${{ matrix.arch }}.tar.gz" "${BINARY_NAME}"
         fi
+        
+        # Clean up the individual binary to avoid confusion
+        rm "${BINARY_NAME}"
+        
+        # Debug: List what we created
+        ls -la
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: minecraft-instance-manager-${{ matrix.os }}-${{ matrix.arch }}
         path: |
-          dist/*.tar.gz
-          dist/*.zip
+          dist/minecraft-instance-manager-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+          dist/minecraft-instance-manager-${{ matrix.os }}-${{ matrix.arch }}.zip
         retention-days: 30
+        if-no-files-found: ignore
 
   release:
     needs: build
@@ -96,9 +99,33 @@ jobs:
     - name: Prepare release assets
       run: |
         mkdir -p release-assets
+        
+        # Debug: Show what we downloaded
+        echo "Downloaded artifacts:"
+        find artifacts -type f -name "*.tar.gz" -o -name "*.zip" | sort
+        
+        # Copy archives to release assets
         find artifacts -name "*.tar.gz" -exec cp {} release-assets/ \;
         find artifacts -name "*.zip" -exec cp {} release-assets/ \;
+        
+        # Debug: Show final release assets
+        echo "Release assets:"
         ls -la release-assets/
+        
+        # Test a few archives to ensure they contain the binary directly
+        echo "Testing archive contents:"
+        for archive in release-assets/*.tar.gz; do
+          if [ -f "$archive" ]; then
+            echo "Contents of $(basename "$archive"):"
+            tar -tzf "$archive" | head -5
+          fi
+        done
+        for archive in release-assets/*.zip; do
+          if [ -f "$archive" ]; then
+            echo "Contents of $(basename "$archive"):"
+            unzip -l "$archive" | head -10
+          fi
+        done
     
     - name: Create Release
       uses: softprops/action-gh-release@v2
