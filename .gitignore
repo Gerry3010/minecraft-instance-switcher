@@ -1,0 +1,21 @@
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+
+# Test instances (don't commit actual Minecraft instances)
+test-instances/
+*.jar
+
+# Personal configuration
+personal-config/
