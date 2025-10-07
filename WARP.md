@@ -4,7 +4,9 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-The Minecraft Instance Manager is a lightweight bash-based tool that allows users to manage multiple Minecraft installations using symlinks. It enables instant switching between different Minecraft setups (modpacks, versions, configurations) without copying files or wasting disk space.
+The Minecraft Instance Manager is a modern Go application that provides both a beautiful terminal user interface (TUI) and command-line interface (CLI) for managing multiple Minecraft installations using symlinks. It enables instant switching between different Minecraft setups (modpacks, versions, configurations) without copying files or wasting disk space.
+
+**Tech Stack**: Go, Cobra (CLI framework), Viper (configuration), Bubble Tea (TUI framework), Lip Gloss (styling)
 
 ## Core Architecture
 
@@ -23,92 +25,123 @@ The system works by:
 ```
 
 ### Key Components
-- **Main Script**: `minecraft-instances` - The core bash script containing all functionality
-- **Installation Script**: `install.sh` - Handles system-wide or user-local installation
-- **Documentation**: `README.md` and `examples/USAGE_EXAMPLES.md`
+- **Main Application**: `cmd/minecraft-instance-manager/main.go` - Entry point with Cobra CLI setup
+- **CLI Commands**: `cmd/minecraft-instance-manager/commands.go` - Cobra command implementations
+- **Instance Manager**: `internal/instance/manager.go` - Core business logic for instance management
+- **TUI Interface**: `internal/tui/` - Bubble Tea terminal user interface
+- **GitHub Actions**: `.github/workflows/build-and-release.yml` - CI/CD pipeline for cross-platform builds
+- **Documentation**: `README.md`, `examples/USAGE_EXAMPLES.md`, and `WARP.md`
 
 ## Common Commands
 
 ### Development and Testing
 ```bash
-# Test the script locally (make executable first)
-chmod +x minecraft-instances
-./minecraft-instances list
+# Build the application
+go build -o minecraft-instance-manager ./cmd/minecraft-instance-manager
+
+# Run tests
+go test ./...
+
+# Test the application locally
+./minecraft-instance-manager list
 
 # Test all core functions
-./minecraft-instances create test-instance
-./minecraft-instances switch test-instance
-./minecraft-instances list
-./minecraft-instances restore
+./minecraft-instance-manager create test-instance
+./minecraft-instance-manager switch test-instance
+./minecraft-instance-manager list
+./minecraft-instance-manager restore
+
+# Test TUI mode
+./minecraft-instance-manager
 
 # Clean up test instance
-rm -rf ~/.minecraft-instances/test-instance
+./minecraft-instance-manager delete test-instance
 ```
 
-### Installation
+### Build and Release
 ```bash
-# Install system-wide (requires sudo)
-sudo ./install.sh
+# Build for current platform
+go build -o minecraft-instance-manager ./cmd/minecraft-instance-manager
 
-# Install for current user only
-./install.sh
+# Build for all platforms (requires Go 1.21+)
+GOOS=linux GOARCH=amd64 go build -o dist/minecraft-instance-manager-linux-amd64 ./cmd/minecraft-instance-manager
+GOOS=windows GOARCH=amd64 go build -o dist/minecraft-instance-manager-windows-amd64.exe ./cmd/minecraft-instance-manager
+GOOS=darwin GOARCH=amd64 go build -o dist/minecraft-instance-manager-darwin-amd64 ./cmd/minecraft-instance-manager
 
-# Manual installation to custom location
-cp minecraft-instances ~/bin/
-chmod +x ~/bin/minecraft-instances
+# Install locally
+go install ./cmd/minecraft-instance-manager
 ```
 
 ### Code Quality
 ```bash
-# Check bash syntax
-bash -n minecraft-instances
+# Run Go vet
+go vet ./...
 
-# Run with debug output
-bash -x minecraft-instances list
+# Run tests with coverage
+go test -v -cover ./...
 
-# Check for common bash issues with shellcheck (if available)
-shellcheck minecraft-instances
-shellcheck install.sh
+# Format code
+go fmt ./...
+
+# Tidy dependencies
+go mod tidy
+
+# Check for updates
+go list -u -m all
 ```
 
-## Script Architecture
+## Application Architecture
 
-### Function Organization
-The main script follows a simple pattern:
-1. **Configuration Variables** - Define paths and constants
-2. **Core Functions** - Each command is a separate function
-3. **Command Router** - Case statement dispatching to functions
+### Project Structure
+The Go application follows standard Go project layout:
+1. **cmd/minecraft-instance-manager/** - Application entry point and CLI setup
+2. **internal/instance/** - Core business logic for instance management
+3. **internal/tui/** - Bubble Tea terminal user interface components
+4. **pkg/** - Reusable packages (configuration, utilities)
 
-### Key Functions
-- `create_instance()` - Creates new instance by copying current .minecraft
-- `switch_instance()` - Backs up current .minecraft and creates symlink
-- `list_instances()` - Shows instances with mod counts and current status
-- `restore_default()` - Removes symlink and restores original .minecraft
+### Key Components
+- `instance.Manager` - Core instance management with full CRUD operations
+- `tui.Model` - Bubble Tea model handling UI state and user interactions
+- `cobra.Command` - CLI command definitions with proper argument validation
+- GitHub Actions - Automated testing and cross-platform binary builds
+
+### TUI Architecture
+- **State Management** - Clean state transitions (list → detail → create → delete)
+- **Keyboard Handling** - Intuitive shortcuts with help system
+- **Real-time Updates** - Immediate UI refresh after operations
+- **Error Handling** - User-friendly error messages and recovery
 
 ### Safety Mechanisms
 - Always backs up current .minecraft before switching
-- Validates instance exists before switching
+- Validates instance exists before switching  
 - Uses symlinks (non-destructive, easily reversible)
 - Provides restore functionality
+- Confirmation dialogs for destructive operations
+- Proper error handling and user feedback
 
 ## Development Guidelines
 
 ### Code Style
-- Use bash best practices (proper quoting, error handling)
-- Include helpful echo messages for user feedback
-- Use local variables in functions
-- Check for required arguments and provide usage help
+- Follow Go conventions (gofmt, go vet, golint)
+- Use meaningful package and function names
+- Include comprehensive error handling with wrapped errors
+- Add helpful user messages and feedback in both CLI and TUI modes
+- Use structured logging when necessary
 
 ### Testing Approach
 - Test with different Minecraft directory states (exists/doesn't exist)
-- Test error conditions (invalid instance names, missing directories)
-- Verify symlink creation and backup functionality
-- Test mod counting accuracy
+- Test error conditions (invalid instance names, missing directories, permission issues)
+- Verify symlink creation and backup functionality  
+- Test mod/config/save counting accuracy
+- Test TUI state transitions and keyboard interactions
+- Test CLI command parsing and validation
 
 ### File Structure Expectations
-- Main script should remain self-contained
-- Installation script should handle both system and user installs
-- Documentation should be comprehensive but concise
+- Follow Go project layout standards
+- Keep business logic in internal/instance package
+- Separate TUI concerns in internal/tui package
+- Use dependency injection for testability
+- Keep CLI commands thin, delegating to business logic
 
 ## Platform Considerations
 
