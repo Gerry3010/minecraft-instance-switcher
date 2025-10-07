@@ -2,6 +2,8 @@
 
 A modern, lightweight Minecraft instance manager with a beautiful terminal interface. Uses symlinks to instantly switch between different Minecraft setups without copying files.
 
+> 🤖 **AI Collaboration Notice**: This project was developed in collaboration with the Warp AI assistant (powered by Claude 3.5 Sonnet). The AI helped with code implementation, documentation, and project structure. While the core ideas and direction came from human creativity, the AI's assistance made this project more robust and feature-complete. We believe in transparency about AI usage while celebrating the potential of human-AI collaboration in software development.
+
 ## ✨ Features
 
 - **⚡ Instant switching** - Uses symlinks, no file copying required
