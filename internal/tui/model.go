@@ -179,14 +179,19 @@ type fileItem struct {
 func (f fileItem) FilterValue() string { return f.Name }
 
 func (f fileItem) Title() string {
+	// Safety check for MaxWidth
+	if f.MaxWidth <= 0 {
+		f.MaxWidth = 20 // Default fallback
+	}
+	
 	// If selected and name is too long, scroll horizontally
-	if f.IsSelected && len(f.Name) > f.MaxWidth && f.MaxWidth > 0 {
+	if f.IsSelected && len(f.Name) > f.MaxWidth {
 		return f.scrollText(f.Name, f.MaxWidth, f.ScrollOffset)
 	}
-	// Otherwise truncate with ellipsis
-	if len(f.Name) > f.MaxWidth && f.MaxWidth > 0 {
+	// Otherwise truncate with ellipsis to prevent wrapping
+	if len(f.Name) > f.MaxWidth {
 		if f.MaxWidth <= 3 {
-			return f.Name[:f.MaxWidth]
+			return f.Name[:f.MaxWidth] // Very narrow, just cut off
 		}
 		return f.Name[:f.MaxWidth-3] + "..."
 	}
@@ -356,9 +361,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.searchList.SetSize(msg.Width, msg.Height-4)
 		
 		// Set panel sizes for detail view (each panel gets 1/3 of width)
-		panelWidth := msg.Width / 3
-		if panelWidth < 10 {
-			panelWidth = 10 // Minimum width
+		// Account for borders (2 chars each side) + padding (2 chars each side) + spacing between panels
+		panelWidth := (msg.Width / 3) - 8 // More conservative width calculation
+		if panelWidth < 8 {
+			panelWidth = 8 // Minimum usable width
 		}
 		panelHeight := msg.Height - 6 // Leave space for header and instructions
 		if panelHeight < 5 {
@@ -516,9 +522,10 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.instanceInfo = info
 			
 			// Populate the detail panel lists directly
-			panelWidth := (m.terminalWidth / 3) - 4 // Account for borders and padding
-			if panelWidth < 10 {
-				panelWidth = 10
+			// Account for borders (2 chars each side) + padding (2 chars each side) + spacing between panels
+			panelWidth := (m.terminalWidth / 3) - 8 // More conservative width calculation
+			if panelWidth < 8 {
+				panelWidth = 8 // Minimum usable width
 			}
 			
 			modsItems := make([]list.Item, len(info.ModsDir))
@@ -958,9 +965,10 @@ func (m model) viewDetailPanel() string {
 	if terminalWidth == 0 {
 		terminalWidth = 120 // Default fallback
 	}
-	panelWidth := (terminalWidth / 3) - 2 // Account for borders
-	if panelWidth < 10 {
-		panelWidth = 10
+	// Account for borders (2 chars each side) + padding (2 chars each side) + spacing between panels
+	panelWidth := (terminalWidth / 3) - 8 // More conservative width calculation
+	if panelWidth < 8 {
+		panelWidth = 8 // Minimum usable width
 	}
 
 	// Apply active styles to titles
