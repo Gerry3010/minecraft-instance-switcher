@@ -17,11 +17,9 @@ type state int
 
 const (
 	stateList state = iota
-	stateDetail
 	stateDetailPanel
 	stateCreate
 	stateConfirmDelete
-	stateSearch
 	stateConfirmRestore
 )
 
@@ -50,15 +48,15 @@ type keyMap struct {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Help, k.Quit}
+	return []key.Binding{k.Create, k.Restore, k.Search, k.Help, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Enter},
-		{k.Create, k.Delete, k.Search},
-		{k.TabNext, k.TabPrev, k.Refresh},
-		{k.Restore, k.Back, k.Quit},
+		{k.Create, k.Delete, k.Restore},
+		{k.Search, k.Refresh, k.Help},
+		{k.Back, k.Quit},
 	}
 }
 
@@ -105,7 +103,7 @@ var keys = keyMap{
 	),
 	Search: key.NewBinding(
 		key.WithKeys("s"),
-		key.WithHelp("s", "show directories"),
+		key.WithHelp("s", "show details"),
 	),
 	TabNext: key.NewBinding(
 		key.WithKeys("tab"),
@@ -279,27 +277,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.state {
 		case stateList:
 			return m.updateList(msg)
-		case stateDetail:
-			return m.updateDetail(msg)
 		case stateDetailPanel:
 			return m.updateDetailPanel(msg)
 		case stateCreate:
 			return m.updateCreate(msg)
 		case stateConfirmDelete:
 			return m.updateConfirmDelete(msg)
-		case stateSearch:
-			return m.updateSearch(msg)
 		case stateConfirmRestore:
 			return m.updateConfirmRestore(msg)
 		}
 
 	case tea.WindowSizeMsg:
+		// Safety check for minimum terminal size
+		if msg.Width < 10 || msg.Height < 10 {
+			return m, nil
+		}
+		
 		m.list.SetSize(msg.Width, msg.Height-4)
 		m.searchList.SetSize(msg.Width, msg.Height-4)
 		
 		// Set panel sizes for detail view (each panel gets 1/3 of width)
 		panelWidth := msg.Width / 3
+		if panelWidth < 10 {
+			panelWidth = 10 // Minimum width
+		}
 		panelHeight := msg.Height - 6 // Leave space for header and instructions
+		if panelHeight < 5 {
+			panelHeight = 5 // Minimum height
+		}
 		m.modsList.SetSize(panelWidth, panelHeight)
 		m.configsList.SetSize(panelWidth, panelHeight)
 		m.savesList.SetSize(panelWidth, panelHeight)
@@ -360,22 +365,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, refreshInstances
 
-	case searchMsg:
-		searchData, err := m.buildSearchData()
-		if err != nil {
-			m.err = err
-			return m, nil
-		}
-		m.searchData = searchData
-		
-		// Populate search list
-		items := make([]list.Item, len(searchData.AllItems))
-		for i, item := range searchData.AllItems {
-			items[i] = item
-		}
-		m.searchList.SetItems(items)
-		m.state = stateSearch
-		return m, nil
+	// searchMsg removed - we now go directly to 3-column panel view
 
 	case confirmRestoreMsg:
 		m.state = stateConfirmRestore
@@ -417,7 +407,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		
 		selected := m.list.SelectedItem().(instanceItem)
 		if selected.IsActive {
-			// Show details if already active
+			// Show 3-column detail view if already active
 			m.selectedInstance = &selected.Instance
 			info, err := m.manager.GetInstanceInfo(selected.Name)
 			if err != nil {
@@ -425,7 +415,28 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.instanceInfo = info
-			m.state = stateDetail
+			
+			// Populate the detail panel lists directly
+			modsItems := make([]list.Item, len(info.ModsDir))
+			for i, mod := range info.ModsDir {
+				modsItems[i] = fileItem{Name: mod}
+			}
+			m.modsList.SetItems(modsItems)
+			
+			configsItems := make([]list.Item, len(info.ConfigsDir))
+			for i, config := range info.ConfigsDir {
+				configsItems[i] = fileItem{Name: config}
+			}
+			m.configsList.SetItems(configsItems)
+			
+			savesItems := make([]list.Item, len(info.SavesDir))
+			for i, save := range info.SavesDir {
+				savesItems[i] = fileItem{Name: save}
+			}
+			m.savesList.SetItems(savesItems)
+			
+			m.activePanel = panelMods
+			m.state = stateDetailPanel
 		} else {
 			// Switch to this instance
 			return m, func() tea.Msg {
@@ -463,9 +474,41 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, m.keys.Search):
-		return m, func() tea.Msg {
-			return searchMsg{}
+		if len(m.instances) == 0 {
+			return m, nil
 		}
+		
+		selected := m.list.SelectedItem().(instanceItem)
+		// Show 3-column detail view for selected instance
+		m.selectedInstance = &selected.Instance
+		info, err := m.manager.GetInstanceInfo(selected.Name)
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.instanceInfo = info
+		
+		// Populate the detail panel lists
+		modsItems := make([]list.Item, len(info.ModsDir))
+		for i, mod := range info.ModsDir {
+			modsItems[i] = fileItem{Name: mod}
+		}
+		m.modsList.SetItems(modsItems)
+		
+		configsItems := make([]list.Item, len(info.ConfigsDir))
+		for i, config := range info.ConfigsDir {
+			configsItems[i] = fileItem{Name: config}
+		}
+		m.configsList.SetItems(configsItems)
+		
+		savesItems := make([]list.Item, len(info.SavesDir))
+		for i, save := range info.SavesDir {
+			savesItems[i] = fileItem{Name: save}
+		}
+		m.savesList.SetItems(savesItems)
+		
+		m.activePanel = panelMods
+		m.state = stateDetailPanel
 
 	case key.Matches(msg, m.keys.Help):
 		m.help.ShowAll = !m.help.ShowAll
@@ -558,7 +601,7 @@ func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) updateDetailPanel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Back), key.Matches(msg, m.keys.Quit):
-		m.state = stateDetail
+		m.state = stateList
 	case key.Matches(msg, m.keys.TabNext):
 		m.activePanel = (m.activePanel + 1) % 3
 	case key.Matches(msg, m.keys.TabPrev):
@@ -594,16 +637,12 @@ func (m model) View() string {
 	switch m.state {
 	case stateList:
 		return m.viewList()
-	case stateDetail:
-		return m.viewDetail()
 	case stateDetailPanel:
 		return m.viewDetailPanel()
 	case stateCreate:
 		return m.viewCreate()
 	case stateConfirmDelete:
 		return m.viewConfirmDelete()
-	case stateSearch:
-		return m.viewSearch()
 	case stateConfirmRestore:
 		return m.viewConfirmRestore()
 	}
