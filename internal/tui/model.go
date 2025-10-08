@@ -25,6 +25,7 @@ const (
 	stateCreate
 	stateConfirmDelete
 	stateConfirmRestore
+	stateConfirmFileDelete
 )
 
 type detailPanel int
@@ -237,6 +238,9 @@ type model struct {
 	message        string
 	err            error
 	keys           keyMap
+	// File deletion context
+	fileToDelete   string
+	fileType      string // "mod", "config", or "save"
 }
 
 type refreshMsg struct{}
@@ -246,6 +250,7 @@ type deleteMsg struct{ name string }
 type restoreMsg struct{}
 type confirmRestoreMsg struct{}
 type tickMsg struct{}
+type deleteFileMsg struct{ fileName, fileType string }
 
 func initialModel() model {
 	manager, err := instance.NewManager()
@@ -345,6 +350,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirmDelete(msg)
 		case stateConfirmRestore:
 			return m.updateConfirmRestore(msg)
+		case stateConfirmFileDelete:
+			return m.updateConfirmFileDelete(msg)
 		}
 
 	case tea.WindowSizeMsg:
@@ -432,6 +439,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = "Restored default minecraft directory"
 		}
 		return m, refreshInstances
+
+	case deleteFileMsg:
+		err := m.deleteFile(msg.fileName, msg.fileType)
+		if err != nil {
+			m.err = err
+		} else {
+			m.message = fmt.Sprintf("Deleted %s: %s", msg.fileType, msg.fileName)
+			// Refresh the instance info to update the lists
+			if info, infoErr := m.manager.GetInstanceInfo(m.selectedInstance.Name); infoErr == nil {
+				m.instanceInfo = info
+				m.refreshDetailPanelLists()
+			}
+		}
+		m.state = stateDetailPanel
+		return m, nil
 
 	// searchMsg removed - we now go directly to 3-column panel view
 
@@ -754,6 +776,36 @@ func (m model) updateDetailPanel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.activePanel = (m.activePanel + 1) % 3
 	case key.Matches(msg, m.keys.TabPrev):
 		m.activePanel = (m.activePanel + 2) % 3 // +2 is same as -1 in mod 3
+	case key.Matches(msg, m.keys.Delete):
+		// Allow deleting files from any panel
+		if m.selectedInstance != nil {
+			var fileName string
+			var fileType string
+			
+			switch m.activePanel {
+			case panelMods:
+				if m.modsList.SelectedItem() != nil {
+					fileName = m.modsList.SelectedItem().(fileItem).Name
+					fileType = "mod"
+				}
+			case panelConfigs:
+				if m.configsList.SelectedItem() != nil {
+					fileName = m.configsList.SelectedItem().(fileItem).Name
+					fileType = "config"
+				}
+			case panelSaves:
+				if m.savesList.SelectedItem() != nil {
+					fileName = m.savesList.SelectedItem().(fileItem).Name
+					fileType = "save"
+				}
+			}
+			
+			if fileName != "" {
+				m.fileToDelete = fileName
+				m.fileType = fileType
+				m.state = stateConfirmFileDelete
+			}
+		}
 	case key.Matches(msg, m.keys.Edit):
 		// Only allow editing in config panel
 		if m.activePanel == panelConfigs && m.selectedInstance != nil {
@@ -840,6 +892,8 @@ func (m model) View() string {
 		return m.viewConfirmDelete()
 	case stateConfirmRestore:
 		return m.viewConfirmRestore()
+	case stateConfirmFileDelete:
+		return m.viewConfirmFileDelete()
 	}
 	return ""
 }
@@ -1049,7 +1103,7 @@ func (m model) viewDetailPanel() string {
 	)
 
 	// Instructions
-	instructions := dimStyle.Render("Tab/Shift+Tab to switch panels • 'e' to edit config • ESC to go back • ↑/↓ to navigate")
+	instructions := dimStyle.Render("Tab/Shift+Tab to switch panels • 'd' to delete file • 'e' to edit config • ESC to go back • ↑/↓ to navigate")
 
 	return fmt.Sprintf("%s\n\n%s\n\n%s", header, panelsView, instructions)
 }
@@ -1163,6 +1217,112 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// deleteFile deletes a file from the appropriate directory
+func (m model) deleteFile(fileName, fileType string) error {
+	if m.selectedInstance == nil {
+		return fmt.Errorf("no instance selected")
+	}
+	
+	var filePath string
+	instancePath := filepath.Join(m.manager.InstancesPath, m.selectedInstance.Name)
+	
+	switch fileType {
+	case "mod":
+		filePath = filepath.Join(instancePath, "mods", fileName)
+	case "config":
+		filePath = filepath.Join(instancePath, "config", fileName)
+	case "save":
+		filePath = filepath.Join(instancePath, "saves", fileName)
+	default:
+		return fmt.Errorf("unknown file type: %s", fileType)
+	}
+	
+	// Check if file/directory exists
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return fmt.Errorf("%s does not exist", fileName)
+	}
+	
+	// Delete the file or directory
+	return os.RemoveAll(filePath)
+}
+
+// refreshDetailPanelLists refreshes all detail panel lists with current instance info
+func (m *model) refreshDetailPanelLists() {
+	if m.instanceInfo == nil {
+		return
+	}
+	
+	// Calculate proper width for file items
+	panelWidth := (m.terminalWidth / 3) - 2
+	if panelWidth < 15 {
+		panelWidth = 15
+	}
+	itemMaxWidth := panelWidth - 4
+	
+	// Refresh mods list
+	modsItems := make([]list.Item, len(m.instanceInfo.ModsDir))
+	for i, mod := range m.instanceInfo.ModsDir {
+		modsItems[i] = fileItem{
+			Name:         mod,
+			MaxWidth:     itemMaxWidth,
+			ScrollOffset: m.scrollOffset,
+			IsSelected:   false,
+		}
+	}
+	m.modsList.SetItems(modsItems)
+	
+	// Refresh configs list
+	configsItems := make([]list.Item, len(m.instanceInfo.ConfigsDir))
+	for i, config := range m.instanceInfo.ConfigsDir {
+		configsItems[i] = fileItem{
+			Name:         config,
+			MaxWidth:     itemMaxWidth,
+			ScrollOffset: m.scrollOffset,
+			IsSelected:   false,
+		}
+	}
+	m.configsList.SetItems(configsItems)
+	
+	// Refresh saves list
+	savesItems := make([]list.Item, len(m.instanceInfo.SavesDir))
+	for i, save := range m.instanceInfo.SavesDir {
+		savesItems[i] = fileItem{
+			Name:         save,
+			MaxWidth:     itemMaxWidth,
+			ScrollOffset: m.scrollOffset,
+			IsSelected:   false,
+		}
+	}
+	m.savesList.SetItems(savesItems)
+}
+
+// updateConfirmFileDelete handles file deletion confirmation
+func (m model) updateConfirmFileDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		return m, func() tea.Msg {
+			return deleteFileMsg{fileName: m.fileToDelete, fileType: m.fileType}
+		}
+	case "n", "N", "esc":
+		m.state = stateDetailPanel
+	}
+	return m, nil
+}
+
+// viewConfirmFileDelete shows the file deletion confirmation dialog
+func (m model) viewConfirmFileDelete() string {
+	var content strings.Builder
+	
+	content.WriteString(titleStyle.Render("Confirm File Deletion"))
+	content.WriteString("\n\n")
+	content.WriteString(fmt.Sprintf("Are you sure you want to delete this %s?\n", m.fileType))
+	content.WriteString(fmt.Sprintf("File: %s\n", m.fileToDelete))
+	content.WriteString("This action cannot be undone.\n\n")
+	content.WriteString(errorStyle.Render("Press 'y' to confirm, 'n' or ESC to cancel"))
+	
+	return content.String()
 }
 
 // Styles
