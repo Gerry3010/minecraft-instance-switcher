@@ -74,10 +74,20 @@ func (m *Manager) CreateInstance(name string) error {
 		return fmt.Errorf("failed to create instance directory: %w", err)
 	}
 
-	// Copy base minecraft structure if it exists
-	if _, err := os.Stat(m.MinecraftPath); err == nil {
-		if err := copyDir(m.MinecraftPath, instancePath); err != nil {
-			return fmt.Errorf("failed to copy minecraft directory: %w", err)
+	// Copy base minecraft structure if it exists and is not a symlink
+	if info, err := os.Lstat(m.MinecraftPath); err == nil {
+		// If it's a symlink, resolve it and copy from the actual directory
+		if info.Mode()&os.ModeSymlink != 0 {
+			if target, err := os.Readlink(m.MinecraftPath); err == nil {
+				if err := copyDir(target, instancePath); err != nil {
+					return fmt.Errorf("failed to copy minecraft directory: %w", err)
+				}
+			}
+		} else {
+			// It's a regular directory
+			if err := copyDir(m.MinecraftPath, instancePath); err != nil {
+				return fmt.Errorf("failed to copy minecraft directory: %w", err)
+			}
 		}
 	}
 
@@ -274,7 +284,12 @@ func copyDir(src, dst string) error {
 		dstPath := filepath.Join(dst, relPath)
 
 		if d.IsDir() {
-			return os.MkdirAll(dstPath, d.Type().Perm())
+			return os.MkdirAll(dstPath, 0755)
+		}
+
+		// Skip copying certain files/directories
+		if strings.Contains(relPath, ".git") || strings.Contains(relPath, ".DS_Store") {
+			return nil
 		}
 
 		return copyFile(path, dstPath)
