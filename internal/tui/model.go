@@ -530,12 +530,14 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if panelWidth < 15 {
 				panelWidth = 15 // Minimum usable width
 			}
+			// Account for list item padding and borders for actual text width
+			itemMaxWidth := panelWidth - 4 // Account for border (2) and list padding (2)
 			
 			modsItems := make([]list.Item, len(info.ModsDir))
 			for i, mod := range info.ModsDir {
 				modsItems[i] = fileItem{
 					Name:         mod,
-					MaxWidth:     panelWidth,
+					MaxWidth:     itemMaxWidth,
 					ScrollOffset: m.scrollOffset,
 					IsSelected:   i == 0, // First item is selected initially
 				}
@@ -546,7 +548,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			for i, config := range info.ConfigsDir {
 				configsItems[i] = fileItem{
 					Name:         config,
-					MaxWidth:     panelWidth,
+					MaxWidth:     itemMaxWidth,
 					ScrollOffset: m.scrollOffset,
 					IsSelected:   false, // Not initially selected
 				}
@@ -557,7 +559,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			for i, save := range info.SavesDir {
 				savesItems[i] = fileItem{
 					Name:         save,
-					MaxWidth:     panelWidth,
+					MaxWidth:     itemMaxWidth,
 					ScrollOffset: m.scrollOffset,
 					IsSelected:   false, // Not initially selected
 				}
@@ -617,22 +619,39 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.instanceInfo = info
 		
+		// Calculate proper width for file items
+		panelWidth := (m.terminalWidth / 3) - 2 // Minimal border accounting
+		if panelWidth < 15 {
+			panelWidth = 15 // Minimum usable width
+		}
+		// Account for list item padding and borders for actual text width
+		itemMaxWidth := panelWidth - 4 // Account for border (2) and list padding (2)
+		
 		// Populate the detail panel lists
 		modsItems := make([]list.Item, len(info.ModsDir))
 		for i, mod := range info.ModsDir {
-			modsItems[i] = fileItem{Name: mod}
+			modsItems[i] = fileItem{
+				Name:     mod,
+				MaxWidth: itemMaxWidth,
+			}
 		}
 		m.modsList.SetItems(modsItems)
 		
 		configsItems := make([]list.Item, len(info.ConfigsDir))
 		for i, config := range info.ConfigsDir {
-			configsItems[i] = fileItem{Name: config}
+			configsItems[i] = fileItem{
+				Name:     config,
+				MaxWidth: itemMaxWidth,
+			}
 		}
 		m.configsList.SetItems(configsItems)
 		
 		savesItems := make([]list.Item, len(info.SavesDir))
 		for i, save := range info.SavesDir {
-			savesItems[i] = fileItem{Name: save}
+			savesItems[i] = fileItem{
+				Name:     save,
+				MaxWidth: itemMaxWidth,
+			}
 		}
 		m.savesList.SetItems(savesItems)
 		
