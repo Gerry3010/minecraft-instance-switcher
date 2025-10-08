@@ -53,7 +53,7 @@ type keyMap struct {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Create, k.Restore, k.Search, k.Help, k.Quit}
+	return []key.Binding{k.Create, k.Delete, k.Restore, k.Search, k.Help, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
@@ -205,8 +205,8 @@ func (f fileItem) scrollText(text string, maxWidth, offset int) string {
 		return text
 	}
 	
-	// Create a sliding window effect
-	visibleText := text + "   " + text // Add some spacing and repeat
+	// Create a sliding window effect with minimal spacing
+	visibleText := text + " " + text // Add minimal spacing and repeat
 	start := offset % len(text)
 	visiblePart := visibleText[start:]
 	
