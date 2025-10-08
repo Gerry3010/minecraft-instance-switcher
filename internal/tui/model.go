@@ -361,10 +361,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.searchList.SetSize(msg.Width, msg.Height-4)
 		
 		// Set panel sizes for detail view (each panel gets 1/3 of width)
-		// Account for borders and minimal padding
-		panelWidth := (msg.Width / 3) - 4 // Account for borders and spacing
-		if panelWidth < 10 {
-			panelWidth = 10 // Minimum usable width
+		// Account for borders (2 chars) + padding (2 chars) per panel, but be less conservative
+		panelWidth := (msg.Width / 3) - 2 // Minimal border accounting
+		if panelWidth < 15 {
+			panelWidth = 15 // Minimum usable width
 		}
 		panelHeight := msg.Height - 6 // Leave space for header and instructions
 		if panelHeight < 5 {
@@ -525,10 +525,10 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.instanceInfo = info
 			
 			// Populate the detail panel lists directly
-			// Account for borders and minimal padding
-			panelWidth := (m.terminalWidth / 3) - 4 // Account for borders and spacing
-			if panelWidth < 10 {
-				panelWidth = 10 // Minimum usable width
+			// Account for borders (2 chars) + padding (2 chars) per panel, but be less conservative
+			panelWidth := (m.terminalWidth / 3) - 2 // Minimal border accounting
+			if panelWidth < 15 {
+				panelWidth = 15 // Minimum usable width
 			}
 			
 			modsItems := make([]list.Item, len(info.ModsDir))
@@ -968,10 +968,10 @@ func (m model) viewDetailPanel() string {
 	if terminalWidth == 0 {
 		terminalWidth = 120 // Default fallback
 	}
-	// Account for borders and minimal padding
-	panelWidth := (terminalWidth / 3) - 4 // Account for borders and spacing
-	if panelWidth < 10 {
-		panelWidth = 10 // Minimum usable width
+	// Account for borders (2 chars) + padding (2 chars) per panel, but be less conservative  
+	panelWidth := (terminalWidth / 3) - 2 // Minimal border accounting
+	if panelWidth < 15 {
+		panelWidth = 15 // Minimum usable width
 	}
 
 	// Apply active styles to titles
@@ -992,18 +992,18 @@ func (m model) viewDetailPanel() string {
 	// Create header
 	header := titleStyle.Render(fmt.Sprintf("Instance Details: %s", m.selectedInstance.Name))
 
-	// Create panel styles with borders and backgrounds
+	// Create panel styles with borders and minimal padding
 	activePanelStyle := lipgloss.NewStyle().
 		Width(panelWidth).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#7D56F4")).
-		Padding(0, 1)
+		Padding(0, 0)
 	
 	inactivePanelStyle := lipgloss.NewStyle().
 		Width(panelWidth).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#444444")).
-		Padding(0, 1)
+		Padding(0, 0)
 
 	// Apply appropriate styles based on active panel
 	var modsView, configsView, savesView string
