@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
+	"strings"
 
 	"github.com/Gerry3010/minecraft-instance-switcher/internal/instance"
 	"github.com/spf13/cobra"
@@ -14,6 +16,8 @@ func init() {
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(restoreCmd)
 	rootCmd.AddCommand(deleteCmd)
+	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(versionCmd)
 }
 
 var createCmd = &cobra.Command{
@@ -36,7 +40,7 @@ This will copy your current .minecraft directory structure to create a new insta
 		}
 
 		fmt.Printf("Created instance: %s\n", instanceName)
-		fmt.Printf("Add mods to: %s/.minecraft-instances/%s/mods/\n", manager.HomeDir, instanceName)
+		fmt.Printf("Add mods to: %s/%s/%s/mods/\n", manager.AppDir, "instances", instanceName)
 	},
 }
 
@@ -134,12 +138,12 @@ Note: You cannot delete the currently active instance.`,
 		}
 
 		instanceName := args[0]
-		
+
 		// Confirm deletion
 		fmt.Printf("Are you sure you want to delete instance '%s'? This cannot be undone. (y/N): ", instanceName)
 		var response string
 		fmt.Scanln(&response)
-		
+
 		if response != "y" && response != "Y" {
 			fmt.Println("Deletion cancelled")
 			return
@@ -151,5 +155,86 @@ Note: You cannot delete the currently active instance.`,
 		}
 
 		fmt.Printf("Deleted instance: %s\n", instanceName)
+	},
+}
+
+/*
+config command usage:
+
+	config show
+	config <key>
+	config <key> <path>
+
+Supported keys: minecraft-path, instances-path, backup-path
+*/
+var configCmd = &cobra.Command{
+	Use:   "config <key|show> [path]",
+	Short: "Get or set configuration values",
+	Long: `Get or set configuration values.
+Examples:
+  config show
+  config minecraft-path
+  config minecraft-path /home/user/.minecraft
+  config instances-path /path/to/instances
+`,
+	Args: cobra.RangeArgs(1, 2),
+	Run: func(cmd *cobra.Command, args []string) {
+		manager, err := instance.NewManager()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error initializing manager: %v\n", err)
+			os.Exit(1)
+		}
+
+		key := strings.ToLower(args[0])
+
+		if key == "show" || key == "list" {
+			cfg := manager.GetConfig()
+			fmt.Printf("Platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+			fmt.Println("Configuration:")
+			for k, v := range cfg {
+				fmt.Printf("  %s: %s\n", k, v)
+			}
+			return
+		}
+
+		// normalize keys
+		switch key {
+		case "minecraft", "minecraft-dir":
+			key = "minecraft-path"
+		case "instances", "instances-dir":
+			key = "instances-path"
+		case "backup", "backup-dir":
+			key = "backup-path"
+		}
+
+		if len(args) == 1 {
+			// show single value
+			cfg := manager.GetConfig()
+			val, ok := cfg[key]
+			if !ok {
+				fmt.Fprintf(os.Stderr, "Unknown config key: %s\n", key)
+				os.Exit(1)
+			}
+			fmt.Printf("%s: %s\n", key, val)
+			return
+		}
+
+		// set new value
+		newPath := args[1]
+		if err := manager.UpdateConfig(key, newPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error updating config: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Updated %s -> %s\n", key, newPath)
+	},
+}
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Show version information",
+	Long:  `Display the current version of the Minecraft Instance Manager.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("%s %s\n", AppName, Version)
+		fmt.Printf("Platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	},
 }

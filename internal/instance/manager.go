@@ -1,10 +1,12 @@
 package instance
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -13,13 +15,23 @@ const (
 	InstancesDir  = ".minecraft-instances"
 	MinecraftDir  = ".minecraft"
 	BackupSuffix  = ".backup"
+	AppFolderName = "minecraft-instance" // folder inside OS config/app support dir
 )
+
+type Config struct {
+	InstancesPath string `json:"instances_path"`
+	MinecraftPath string `json:"minecraft_path"`
+	BackupPath    string `json:"backup_path"`
+}
 
 type Manager struct {
 	HomeDir       string
+	AppDir        string
+	ConfigFile    string
 	InstancesPath string
 	MinecraftPath string
 	BackupPath    string
+	cfg           Config
 }
 
 type Instance struct {
@@ -32,10 +44,10 @@ type Instance struct {
 }
 
 type InstanceInfo struct {
-	ModsDir     []string
-	ConfigsDir  []string
-	SavesDir    []string
-	OtherFiles  []string
+	ModsDir    []string
+	ConfigsDir []string
+	SavesDir   []string
+	OtherFiles []string
 }
 
 func NewManager() (*Manager, error) {
@@ -44,12 +56,200 @@ func NewManager() (*Manager, error) {
 		return nil, fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
-	return &Manager{
+	userConfigDir, err := os.UserConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user config directory: %w", err)
+	}
+
+	appDir := filepath.Join(userConfigDir, AppFolderName)
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create app config dir: %w", err)
+	}
+
+	configFile := filepath.Join(appDir, "config.json")
+
+	// Get platform-specific default Minecraft path
+	defaultMinecraftPath, err := getDefaultMinecraftPath()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine default Minecraft path: %w", err)
+	}
+
+	// Other defaults
+	defaultInstancesPath := filepath.Join(appDir, "instances")
+	defaultBackupPath := filepath.Join(appDir, "backup")
+
+	m := &Manager{
 		HomeDir:       homeDir,
-		InstancesPath: filepath.Join(homeDir, InstancesDir),
-		MinecraftPath: filepath.Join(homeDir, MinecraftDir),
-		BackupPath:    filepath.Join(homeDir, MinecraftDir+BackupSuffix),
-	}, nil
+		AppDir:        appDir,
+		ConfigFile:    configFile,
+		InstancesPath: defaultInstancesPath,
+		MinecraftPath: defaultMinecraftPath,
+		BackupPath:    defaultBackupPath,
+		cfg: Config{
+			InstancesPath: defaultInstancesPath,
+			MinecraftPath: defaultMinecraftPath,
+			BackupPath:    defaultBackupPath,
+		},
+	}
+
+	// Load config if exists, otherwise create it with defaults
+	if err := m.loadConfig(); err != nil {
+		// if load failed because file doesn't exist, save defaults
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(m.InstancesPath, 0755); err != nil {
+				return nil, fmt.Errorf("failed to create default instances dir: %w", err)
+			}
+			if err := m.saveConfig(); err != nil {
+				return nil, fmt.Errorf("failed to write default config: %w", err)
+			}
+		} else {
+			return nil, err
+		}
+	} else {
+		// apply loaded config
+		m.InstancesPath = m.cfg.InstancesPath
+		m.MinecraftPath = m.cfg.MinecraftPath
+		m.BackupPath = m.cfg.BackupPath
+		// ensure instances dir exists
+		if err := os.MkdirAll(m.InstancesPath, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create instances dir from config: %w", err)
+		}
+	}
+
+	return m, nil
+}
+
+func (m *Manager) loadConfig() error {
+	data, err := os.ReadFile(m.ConfigFile)
+	if err != nil {
+		return err
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	// expand ~ in paths
+	cfg.InstancesPath = expandPath(cfg.InstancesPath)
+	cfg.MinecraftPath = expandPath(cfg.MinecraftPath)
+	cfg.BackupPath = expandPath(cfg.BackupPath)
+
+	// if any are empty, set defaults relative to app dir / platform-specific paths
+	if cfg.InstancesPath == "" {
+		cfg.InstancesPath = filepath.Join(m.AppDir, "instances")
+	}
+	if cfg.MinecraftPath == "" {
+		if defaultPath, err := getDefaultMinecraftPath(); err == nil {
+			cfg.MinecraftPath = defaultPath
+		} else {
+			// Fallback to the old behavior if detection fails
+			cfg.MinecraftPath = filepath.Join(m.HomeDir, MinecraftDir)
+		}
+	}
+	if cfg.BackupPath == "" {
+		cfg.BackupPath = filepath.Join(m.AppDir, "backup")
+	}
+
+	m.cfg = cfg
+	return nil
+}
+
+func (m *Manager) saveConfig() error {
+	m.cfg.InstancesPath = m.InstancesPath
+	m.cfg.MinecraftPath = m.MinecraftPath
+	m.cfg.BackupPath = m.BackupPath
+
+	data, err := json.MarshalIndent(m.cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to encode config: %w", err)
+	}
+	if err := os.WriteFile(m.ConfigFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	return nil
+}
+
+func expandPath(p string) string {
+	if p == "" {
+		return p
+	}
+	if strings.HasPrefix(p, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+	}
+	return p
+}
+
+// getDefaultMinecraftPath returns the platform-specific default Minecraft directory path
+// This function automatically detects the operating system and returns the appropriate
+// default path where Minecraft is typically installed on each platform.
+func getDefaultMinecraftPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user home directory: %w", err)
+	}
+
+	switch runtime.GOOS {
+	case "windows":
+		// Windows: %APPDATA%\.minecraft (e.g., C:\Users\Username\AppData\Roaming\.minecraft)
+		appDataDir := os.Getenv("APPDATA")
+		if appDataDir != "" {
+			return filepath.Join(appDataDir, ".minecraft"), nil
+		}
+		// Fallback to user profile if APPDATA environment variable is not set
+		userProfile := os.Getenv("USERPROFILE")
+		if userProfile != "" {
+			return filepath.Join(userProfile, "AppData", "Roaming", ".minecraft"), nil
+		}
+		// Ultimate fallback - construct path from home directory
+		return filepath.Join(homeDir, "AppData", "Roaming", ".minecraft"), nil
+
+	case "darwin":
+		// macOS: ~/Library/Application Support/minecraft
+		// Note: Minecraft on macOS uses "minecraft" (lowercase) not ".minecraft"
+		return filepath.Join(homeDir, "Library", "Application Support", "minecraft"), nil
+
+	default:
+		// Linux and other Unix-like systems: ~/.minecraft
+		// This includes most Linux distributions, BSD variants, etc.
+		return filepath.Join(homeDir, ".minecraft"), nil
+	}
+}
+
+// UpdateConfig updates one of the supported config keys and persists the file.
+// Supported keys: "minecraft-path", "instances-path", "backup-path"
+func (m *Manager) UpdateConfig(key, value string) error {
+	value = expandPath(value)
+	switch key {
+	case "minecraft-path", "minecraft-dir", "minecraft":
+		m.MinecraftPath = value
+	case "instances-path", "instances-dir", "instances":
+		m.InstancesPath = value
+		// ensure instances dir exists
+		if err := os.MkdirAll(m.InstancesPath, 0755); err != nil {
+			return fmt.Errorf("failed to create instances dir: %w", err)
+		}
+	case "backup-path", "backup-dir", "backup":
+		m.BackupPath = value
+	default:
+		return fmt.Errorf("unknown config key: %s", key)
+	}
+	if err := m.saveConfig(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// GetConfig returns current configuration as a map
+func (m *Manager) GetConfig() map[string]string {
+	return map[string]string{
+		"minecraft-path": m.MinecraftPath,
+		"instances-path": m.InstancesPath,
+		"backup-path":    m.BackupPath,
+		"app-dir":        m.AppDir,
+		"config-file":    m.ConfigFile,
+	}
 }
 
 func (m *Manager) CreateInstance(name string) error {
@@ -58,7 +258,7 @@ func (m *Manager) CreateInstance(name string) error {
 	}
 
 	instancePath := filepath.Join(m.InstancesPath, name)
-	
+
 	// Check if instance already exists
 	if _, err := os.Stat(instancePath); err == nil {
 		return fmt.Errorf("instance '%s' already exists", name)
@@ -109,7 +309,7 @@ func (m *Manager) SwitchInstance(name string) error {
 	}
 
 	instancePath := filepath.Join(m.InstancesPath, name)
-	
+
 	// Check if instance exists
 	if _, err := os.Stat(instancePath); os.IsNotExist(err) {
 		return fmt.Errorf("instance '%s' does not exist", name)
@@ -184,7 +384,7 @@ func (m *Manager) ListInstances() ([]Instance, error) {
 
 		name := entry.Name()
 		instancePath := filepath.Join(m.InstancesPath, name)
-		
+
 		instance := Instance{
 			Name:     name,
 			Path:     instancePath,
@@ -225,7 +425,7 @@ func (m *Manager) GetActiveInstance() string {
 
 func (m *Manager) GetInstanceInfo(name string) (*InstanceInfo, error) {
 	instancePath := filepath.Join(m.InstancesPath, name)
-	
+
 	if _, err := os.Stat(instancePath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("instance '%s' does not exist", name)
 	}
@@ -253,7 +453,7 @@ func (m *Manager) DeleteInstance(name string) error {
 	}
 
 	instancePath := filepath.Join(m.InstancesPath, name)
-	
+
 	// Check if instance exists
 	if _, err := os.Stat(instancePath); os.IsNotExist(err) {
 		return fmt.Errorf("instance '%s' does not exist", name)

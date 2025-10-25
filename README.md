@@ -13,7 +13,7 @@ A modern, lightweight Minecraft instance manager with a beautiful terminal inter
 - **🎨 Beautiful TUI** - Interactive terminal interface with Bubble Tea
 - **🧹 Modern design** - Written in Go with Cobra CLI framework
 - **🔄 Easy restore** - One command to restore original setup
-- **🌐 Cross-platform** - Works on Linux, macOS, and Windows
+- **🌐 Cross-platform** - Works on Linux, macOS, and Windows (with considerations)
 
 ## 🚀 Quick Start
 
@@ -39,6 +39,7 @@ go build -o minecraft-instance-manager ./cmd/minecraft-instance-manager
 #### Interactive TUI Mode (Default)
 ```bash
 # Launch the beautiful terminal interface
+# Automatically detects your OS and sets appropriate Minecraft paths
 minecraft-instance-manager
 ```
 
@@ -209,6 +210,142 @@ Current instance: sebi-1.20.1
 ### Lost original .minecraft
 - Your original is backed up at `~/.minecraft.backup`
 - Run `minecraft-instance-manager restore` to recover it
+
+## 🖥️ Platform Compatibility
+
+The Minecraft Instance Manager is designed to work across different operating systems with some platform-specific considerations:
+
+### ✅ Fully Supported Platforms
+
+| Platform | Status | Notes |
+|----------|--------|--------|
+| **Linux** | ✅ Full Support | Native symlink support, standard `.minecraft` path |
+| **macOS** | ✅ Full Support | Native symlink support, standard `.minecraft` path |
+| **WSL/WSL2** | ✅ Full Support | Linux compatibility within Windows |
+
+### ⚠️ Windows Considerations
+
+| Feature | Status | Requirements |
+|---------|--------|-------------|
+| **Basic Functionality** | ✅ Supported | Windows 10/11 |
+| **Symlink Creation** | ⚠️ Requires Privileges | Administrator rights OR Developer Mode |
+| **Minecraft Path** | ⚠️ Manual Config | May need to set custom path |
+
+#### Windows Setup Instructions
+
+**Option 1: Enable Developer Mode (Recommended)**
+1. Open Settings → Update & Security → For Developers
+2. Enable "Developer Mode"
+3. Restart your computer
+4. Run the application normally
+
+**Option 2: Run as Administrator**
+1. Right-click Command Prompt/PowerShell
+2. Select "Run as Administrator"
+3. Run minecraft-instance-manager commands
+
+**Option 3: Use WSL2 (Best Experience)**
+1. Install WSL2 with Ubuntu
+2. Install and run minecraft-instance-manager in WSL2
+3. Access Windows Minecraft installation via `/mnt/c/Users/.../AppData/Roaming/.minecraft`
+
+### 🗂️ Platform-Specific Paths
+
+#### Automatic Platform Detection
+
+The application **automatically detects your operating system** and sets appropriate default paths:
+
+| Platform | Default Path | Auto-Detected | Configurable |
+|----------|-------------|---------------|--------------|
+| **Linux** | `~/.minecraft` | ✅ Yes | ✅ Yes |
+| **macOS** | `~/Library/Application Support/minecraft` | ✅ Yes | ✅ Yes |
+| **Windows** | `%APPDATA%\.minecraft` | ✅ Yes | ✅ Yes |
+
+> 💡 **No manual configuration needed!** The app automatically uses the correct path for your platform.
+
+#### Configuration Locations
+
+| Platform | Config Directory |
+|----------|-----------------|
+| **Linux** | `~/.config/minecraft-instance/` |
+| **macOS** | `~/Library/Application Support/minecraft-instance/` |
+| **Windows** | `%APPDATA%\minecraft-instance\` |
+
+### 🔧 Custom Path Configuration
+
+If your Minecraft installation is in a non-standard location:
+
+```bash
+# Set custom Minecraft path
+minecraft-instance-manager config minecraft-path "C:\Games\Minecraft\.minecraft"
+
+# Set custom instances directory  
+minecraft-instance-manager config instances-path "D:\MinecraftInstances"
+
+# Verify configuration
+minecraft-instance-manager config show
+```
+
+### 🚀 Build Information
+
+Pre-built binaries are available for:
+- **Linux**: AMD64, ARM64
+- **macOS**: AMD64 (Intel), ARM64 (Apple Silicon)  
+- **Windows**: AMD64
+
+Download from the [releases page](https://github.com/Gerry3010/minecraft-instance-switcher/releases).
+
+### 🔍 Platform-Specific Troubleshooting
+
+#### Windows Issues
+
+**"Access Denied" or Symlink Errors:**
+- Enable Developer Mode or run as Administrator
+- Check if Minecraft path is correct: `%APPDATA%\.minecraft`
+- Consider using WSL2 for better compatibility
+
+**Path Issues:**
+```bash
+# Windows example paths
+minecraft-instance-manager config minecraft-path "C:\Users\Username\AppData\Roaming\.minecraft"
+minecraft-instance-manager config instances-path "C:\MinecraftInstances"
+```
+
+#### macOS Issues
+
+**Permissions:**
+```bash
+# Give terminal full disk access in Security & Privacy settings
+# Or use chmod to fix permissions
+chmod -R 755 ~/.minecraft-instances/
+```
+
+#### Linux Issues
+
+**Snap/Flatpak Minecraft:**
+- May require custom path configuration
+- Check if Minecraft runs in sandboxed environment
+
+### 🧪 Testing Your Platform
+
+Verify compatibility on your system:
+
+```bash
+# Test basic functionality
+minecraft-instance-manager config show
+
+# Test instance creation (safe)
+minecraft-instance-manager create test-compatibility
+
+# Test symlink creation (creates backup first)
+minecraft-instance-manager switch test-compatibility
+
+# Restore original setup
+minecraft-instance-manager restore
+
+# Clean up test
+minecraft-instance-manager delete test-compatibility
+```
 
 ## 🤝 Contributing
 
